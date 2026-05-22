@@ -16,6 +16,11 @@ public sealed class NotificationService
             return false;
         }
 
+        if (IsOutgoingPrivateMessage(message))
+        {
+            return false;
+        }
+
         if (string.Equals(rule.TriggerKind, NotificationTriggerKinds.PrivateMessage, StringComparison.OrdinalIgnoreCase))
         {
             return IsIncomingPrivateMessage(message);
@@ -95,6 +100,11 @@ public sealed class NotificationService
     {
         return string.Equals(message.ChatType, "Private", StringComparison.OrdinalIgnoreCase)
                || string.Equals(message.ChatType, "Private_Received", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsOutgoingPrivateMessage(ChatMessage message)
+    {
+        return string.Equals(message.ChatType, "Private_Sent", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsPlayerDescriptorMatched(ChatMessage message, string? descriptorFilter)
