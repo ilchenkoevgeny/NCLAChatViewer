@@ -1,4 +1,5 @@
 using System.IO;
+using System.Buffers;
 using System.Text;
 using NclaChatViewer.Models;
 
@@ -15,23 +16,28 @@ public sealed class ChatLogTailReader
 
     public string? FilePath => filePath;
 
+    public long LastPosition => lastPosition;
+
     public void SetFile(string path, bool readExistingContent)
     {
-        if (string.Equals(filePath, path, StringComparison.OrdinalIgnoreCase))
+        long startPosition = !readExistingContent && System.IO.File.Exists(path)
+            ? new FileInfo(path).Length
+            : 0;
+
+        SetFile(path, startPosition);
+    }
+
+    public void SetFile(string path, long startPosition)
+    {
+        if (string.Equals(filePath, path, StringComparison.OrdinalIgnoreCase)
+            && lastPosition == startPosition)
         {
             return;
         }
 
         filePath = path;
         tailRemainder = string.Empty;
-
-        if (!readExistingContent && System.IO.File.Exists(path))
-        {
-            lastPosition = new FileInfo(path).Length;
-            return;
-        }
-
-        lastPosition = 0;
+        lastPosition = Math.Max(0, startPosition);
     }
 
     public IReadOnlyList<ChatMessage> ReadNewMessages(bool ignoreCombatChats)
@@ -66,13 +72,16 @@ public sealed class ChatLogTailReader
 
         long startPosition = lastPosition;
         long totalBytesToRead = Math.Max(0, stream.Length - startPosition);
+        long totalLinesToRead = progress is null ? 0 : CountLines(filePath, startPosition);
 
         if (totalBytesToRead == 0)
         {
             progress?.Report(new ChatLogReadProgress
             {
                 TotalBytes = 1,
-                ReadBytes = 1
+                ReadBytes = 1,
+                TotalLines = 0,
+                ParsedLines = 0
             });
             return 0;
         }
@@ -125,6 +134,7 @@ public sealed class ChatLogTailReader
                 {
                     TotalBytes = totalBytesToRead,
                     ReadBytes = Math.Clamp(stream.Position - startPosition, 0, totalBytesToRead),
+                    TotalLines = totalLinesToRead,
                     ParsedLines = parsedLines,
                     AcceptedMessages = acceptedMessages
                 });
@@ -143,6 +153,7 @@ public sealed class ChatLogTailReader
         {
             TotalBytes = totalBytesToRead,
             ReadBytes = totalBytesToRead,
+            TotalLines = totalLinesToRead,
             ParsedLines = parsedLines,
             AcceptedMessages = acceptedMessages
         });
@@ -170,5 +181,62 @@ public sealed class ChatLogTailReader
         batch.Add(message);
         acceptedMessages++;
         resultCount++;
+    }
+
+    private static long CountLines(string path, long startPosition)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !System.IO.File.Exists(path))
+        {
+            return 0;
+        }
+
+        byte[] buffer = ArrayPool<byte>.Shared.Rent(64 * 1024);
+
+        try
+        {
+            using var stream = new FileStream(
+                path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+
+            if (startPosition > stream.Length)
+            {
+                startPosition = 0;
+            }
+
+            stream.Seek(startPosition, SeekOrigin.Begin);
+
+            long count = 0;
+            bool sawAnyByte = false;
+            byte lastByte = 0;
+            int read;
+
+            while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
+            {
+                sawAnyByte = true;
+
+                for (int i = 0; i < read; i++)
+                {
+                    if (buffer[i] == (byte)'\n')
+                    {
+                        count++;
+                    }
+                }
+
+                lastByte = buffer[read - 1];
+            }
+
+            if (sawAnyByte && lastByte != (byte)'\n')
+            {
+                count++;
+            }
+
+            return count;
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
     }
 }

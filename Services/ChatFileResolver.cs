@@ -66,6 +66,28 @@ public static class ChatFileResolver
             .FirstOrDefault();
     }
 
+    public static IReadOnlyList<string> GetLogFilePaths(string logsDirectory, string fileNamePattern)
+    {
+        if (string.IsNullOrWhiteSpace(logsDirectory))
+        {
+            return Array.Empty<string>();
+        }
+
+        string directory = ResolveDirectory(logsDirectory);
+        if (!Directory.Exists(directory))
+        {
+            return Array.Empty<string>();
+        }
+
+        string mask = BuildDateAgnosticMask(fileNamePattern);
+
+        return Directory
+            .EnumerateFiles(directory, mask, SearchOption.TopDirectoryOnly)
+            .OrderBy(GetLogFileDateTimeOrLastWriteTimeUtc)
+            .ThenBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
     public static DateTime? TryGetLogFileDate(string? path)
     {
         if (string.IsNullOrWhiteSpace(path))

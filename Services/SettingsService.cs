@@ -28,6 +28,8 @@ public sealed class SettingsService
 
     public string SettingsPath => settingsPath;
 
+    public string SettingsDirectory => settingsDirectory;
+
     public AppSettings Load()
     {
         AppSettings settings = LoadFromUserProfile()

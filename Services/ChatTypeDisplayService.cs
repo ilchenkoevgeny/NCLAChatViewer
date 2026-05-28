@@ -27,7 +27,8 @@ public static class ChatTypeDisplayService
         ["Emote"] = "Эмоции",
         ["Admin"] = "Админ",
         ["Error"] = "Ошибки",
-        ["Channel"] = "Каналы"
+        ["Channel"] = "Каналы",
+        ["Guild"] = "Гильдия",
     };
 
     private static readonly Dictionary<string, string> AccentColors = new(StringComparer.OrdinalIgnoreCase)
@@ -55,7 +56,8 @@ public static class ChatTypeDisplayService
         ["Emote"] = "#60A5FA",
         ["Admin"] = "#38BDF8",
         ["Error"] = "#DC2626",
-        ["Channel"] = "#2DD4BF"
+        ["Channel"] = "#2DD4BF",
+        ["Guild"] = "#79FCAE",
     };
 
     /// <summary>
@@ -173,9 +175,7 @@ public static class ChatTypeDisplayService
 
         string groupName = GetTabGroupName(chatType);
 
-        return AccentColors.TryGetValue(groupName, out string? color)
-            ? color
-            : "#60A5FA";
+        return AccentColors.GetValueOrDefault(groupName, "#60A5FA");
     }
 
     private static string SplitPascalCase(string value)

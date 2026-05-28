@@ -18,6 +18,8 @@
     <Color x:Key="DataGridAltRowColor">#1A2638</Color>
     <Color x:Key="RowHoverColor">#283A56</Color>
     <Color x:Key="SelectionColor">#2563EB</Color>
+    <Color x:Key="DataGridSelectionColor">#9A7A2E</Color>
+    <Color x:Key="DataGridSelectionTextColor">#FFF7D6</Color>
     <Color x:Key="ComboPopupBackgroundColor">#172033</Color>
     <Color x:Key="ComboPopupBorderColor">#60A5FA</Color>
 
@@ -39,6 +41,8 @@
     <SolidColorBrush x:Key="DataGridAltRowBrush" Color="{StaticResource DataGridAltRowColor}" />
     <SolidColorBrush x:Key="RowHoverBrush" Color="{StaticResource RowHoverColor}" />
     <SolidColorBrush x:Key="SelectionBrush" Color="{StaticResource SelectionColor}" />
+    <SolidColorBrush x:Key="DataGridSelectionBrush" Color="{StaticResource DataGridSelectionColor}" />
+    <SolidColorBrush x:Key="DataGridSelectionTextBrush" Color="{StaticResource DataGridSelectionTextColor}" />
     <SolidColorBrush x:Key="ComboPopupBackgroundBrush" Color="{StaticResource ComboPopupBackgroundColor}" />
     <SolidColorBrush x:Key="ComboPopupBorderBrush" Color="{StaticResource ComboPopupBorderColor}" />
 
@@ -150,6 +154,20 @@
                                           ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
                                           ContentStringFormat="{TemplateBinding SelectionBoxItemStringFormat}" />
 
+                        <TextBox x:Name="PART_EditableTextBox"
+                                 Margin="9,3,30,3"
+                                 Padding="0"
+                                 Text="{Binding Text, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 Visibility="Collapsed"
+                                 HorizontalAlignment="Stretch"
+                                 VerticalAlignment="Center"
+                                 Background="Transparent"
+                                 BorderThickness="0"
+                                 Foreground="{DynamicResource TextBrush}"
+                                 CaretBrush="{DynamicResource TextBrush}"
+                                 IsReadOnly="{TemplateBinding IsReadOnly}"
+                                 Focusable="True" />
+
                         <Popup x:Name="Popup"
                                Placement="Bottom"
                                IsOpen="{TemplateBinding IsDropDownOpen}"
@@ -177,6 +195,10 @@
                         </Trigger>
                         <Trigger Property="IsKeyboardFocusWithin" Value="True">
                             <Setter TargetName="MainBorder" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsEditable" Value="True">
+                            <Setter TargetName="ContentSite" Property="Visibility" Value="Collapsed" />
+                            <Setter TargetName="PART_EditableTextBox" Property="Visibility" Value="Visible" />
                         </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
                             <Setter TargetName="MainBorder" Property="Background" Value="{DynamicResource PanelBackgroundAltBrush}" />
@@ -210,6 +232,58 @@
                         <Trigger Property="IsSelected" Value="True">
                             <Setter TargetName="Root" Property="Background" Value="{DynamicResource SelectionBrush}" />
                             <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style TargetType="ContextMenu">
+        <Setter Property="OverridesDefaultStyle" Value="True" />
+        <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+        <Setter Property="Background" Value="{DynamicResource PanelBackgroundBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Padding" Value="4" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ContextMenu">
+                    <Border Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            Padding="{TemplateBinding Padding}"
+                            SnapsToDevicePixels="True">
+                        <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Cycle" />
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style TargetType="MenuItem">
+        <Setter Property="OverridesDefaultStyle" Value="True" />
+        <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Padding" Value="10,7" />
+        <Setter Property="MinWidth" Value="180" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="MenuItem">
+                    <Border x:Name="Root"
+                            Background="{TemplateBinding Background}"
+                            CornerRadius="7"
+                            Padding="{TemplateBinding Padding}">
+                        <ContentPresenter ContentSource="Header"
+                                          RecognizesAccessKey="True"
+                                          TextElement.Foreground="{TemplateBinding Foreground}" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsHighlighted" Value="True">
+                            <Setter TargetName="Root" Property="Background" Value="{DynamicResource ControlBackgroundHoverBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" Value="0.45" />
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
@@ -266,6 +340,12 @@
                 </ControlTemplate>
             </Setter.Value>
         </Setter>
+        <Style.Triggers>
+            <Trigger Property="IsSelected" Value="True">
+                <Setter Property="Background" Value="{DynamicResource DataGridSelectionBrush}" />
+                <Setter Property="Foreground" Value="{DynamicResource DataGridSelectionTextBrush}" />
+            </Trigger>
+        </Style.Triggers>
     </Style>
 
     <Style TargetType="DataGridRow">
@@ -275,8 +355,8 @@
                 <Setter Property="Background" Value="{DynamicResource RowHoverBrush}" />
             </Trigger>
             <Trigger Property="IsSelected" Value="True">
-                <Setter Property="Background" Value="{DynamicResource SelectionBrush}" />
-                <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+                <Setter Property="Background" Value="{DynamicResource DataGridSelectionBrush}" />
+                <Setter Property="Foreground" Value="{DynamicResource DataGridSelectionTextBrush}" />
             </Trigger>
         </Style.Triggers>
     </Style>

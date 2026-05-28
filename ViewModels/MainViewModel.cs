@@ -27,9 +27,11 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
     private readonly AntiAwayService antiAwayService = new();
     private readonly GameWindowService gameWindowService = new();
     private readonly SemaphoreSlim readLock = new(1, 1);
+    private readonly SemaphoreSlim loadLock = new(1, 1);
     private readonly System.Threading.Timer timer;
 
     private AppSettings settings;
+    private ChatDatabaseService chatDatabase = null!;
     private ICollectionView? visibleTabs;
     private ChatTabViewModel? selectedTab;
     private string? selectedPlayer = AllPlayersValue;
@@ -44,17 +46,27 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
     private DateTime followedLogDate = DateTime.Today;
     private bool isLoading;
     private int loadingProgress;
+    private string loadingTitle = string.Empty;
+    private string loadingProgressText = "0%";
     private string loadingText = string.Empty;
+    private DateTime? selectedLogDate = DateTime.Today;
+    private bool searchWholeHistory;
+    private CancellationTokenSource? databaseLoadCancellation;
+    private bool suppressLogDateReload;
+    private bool suppressFilterChange;
     private bool disposed;
 
     public MainViewModel()
     {
         settings = settingsService.Load();
+        chatDatabase = new ChatDatabaseService(settings.DatabasePath, settingsService.SettingsDirectory);
+        settings.DatabasePath = chatDatabase.DatabasePath;
         themeService.ApplyTheme(settings.Theme);
 
         Tabs = new ObservableCollection<ChatTabViewModel>();
         Players = new ObservableCollection<string> { AllPlayersValue };
         Channels = new ObservableCollection<string> { AllChannelsValue };
+        AvailableLogDates = new ObservableCollection<DateTime>();
         NotificationChannels = new ObservableCollection<ChatFilterOption>();
         ResetNotificationChannels();
         NotificationTriggerModes = new ObservableCollection<string>
@@ -94,14 +106,7 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
 
         ApplyKeepAwakeState();
 
-        if (settings.OpenTodayFileOnStart)
-        {
-            OpenTodayFile();
-        }
-        else
-        {
-            RestartTimer();
-        }
+        _ = InitializeAsync();
     }
 
     public ObservableCollection<ChatTabViewModel> Tabs { get; }
@@ -123,6 +128,8 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
     public ObservableCollection<string> Players { get; }
 
     public ObservableCollection<string> Channels { get; }
+
+    public ObservableCollection<DateTime> AvailableLogDates { get; }
 
     public ObservableCollection<ChatFilterOption> NotificationChannels { get; }
 
@@ -184,9 +191,26 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
         get => selectedPlayer;
         set
         {
-            if (SetProperty(ref selectedPlayer, value))
+            if (suppressFilterChange)
             {
-                RefreshFilters();
+                return;
+            }
+
+            string? normalizedValue = string.IsNullOrWhiteSpace(value)
+                ? string.Empty
+                : value;
+
+            if (SetProperty(ref selectedPlayer, normalizedValue))
+            {
+                OnPropertyChanged(nameof(CanSearchWholeHistory));
+
+                if (!CanSearchWholeHistory && SearchWholeHistory)
+                {
+                    SearchWholeHistory = false;
+                    return;
+                }
+
+                RefreshFiltersOrReloadFromDatabase();
             }
         }
     }
@@ -198,7 +222,12 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
         {
             if (SetProperty(ref filterPlayerByDescriptor, value))
             {
-                RefreshFilters();
+                if (!SearchWholeHistory)
+                {
+                    RebuildPlayersFromMessages();
+                }
+
+                RefreshFiltersOrReloadFromDatabase();
             }
         }
     }
@@ -220,9 +249,14 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
         get => selectedChannel;
         set
         {
+            if (suppressFilterChange)
+            {
+                return;
+            }
+
             if (SetProperty(ref selectedChannel, value))
             {
-                RefreshFilters();
+                RefreshFiltersOrReloadFromDatabase();
             }
         }
     }
@@ -234,7 +268,30 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
         {
             if (SetProperty(ref searchText, value ?? string.Empty))
             {
-                RefreshFilters();
+                OnPropertyChanged(nameof(CanSearchWholeHistory));
+
+                if (!CanSearchWholeHistory && SearchWholeHistory)
+                {
+                    SearchWholeHistory = false;
+                    return;
+                }
+
+                RefreshFiltersOrReloadFromDatabase();
+            }
+        }
+    }
+
+    public DateTime? SelectedLogDate
+    {
+        get => selectedLogDate;
+        set
+        {
+            DateTime? normalizedValue = value?.Date;
+            if (SetProperty(ref selectedLogDate, normalizedValue)
+                && !suppressLogDateReload
+                && normalizedValue.HasValue)
+            {
+                _ = LoadMessagesFromDatabaseAsync("Загрузка сообщений");
             }
         }
     }
@@ -261,6 +318,18 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
     {
         get => loadingProgress;
         private set => SetProperty(ref loadingProgress, value);
+    }
+
+    public string LoadingTitle
+    {
+        get => loadingTitle;
+        private set => SetProperty(ref loadingTitle, value);
+    }
+
+    public string LoadingProgressText
+    {
+        get => loadingProgressText;
+        private set => SetProperty(ref loadingProgressText, value);
     }
 
     public string LoadingText
@@ -337,19 +406,6 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
     }
 
 
-    public bool IgnoreCombatChats
-    {
-        get => settings.IgnoreCombatChats;
-        set
-        {
-            if (settings.IgnoreCombatChats != value)
-            {
-                settings.IgnoreCombatChats = value;
-                OnPropertyChanged();
-            }
-        }
-    }
-
     public bool AutoSwitchToLatestTodayFile
     {
         get => settings.AutoSwitchToLatestTodayFile;
@@ -388,6 +444,34 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
             }
         }
     }
+
+    public bool DeleteImportedLogFiles
+    {
+        get => settings.DeleteImportedLogFiles;
+        set
+        {
+            if (settings.DeleteImportedLogFiles != value)
+            {
+                settings.DeleteImportedLogFiles = value;
+                OnPropertyChanged();
+            }
+        }
+    }
+
+    public bool SearchWholeHistory
+    {
+        get => searchWholeHistory;
+        set
+        {
+            bool safeValue = value && CanSearchWholeHistory;
+            if (SetProperty(ref searchWholeHistory, safeValue))
+            {
+                _ = LoadMessagesFromDatabaseAsync("Загрузка сообщений");
+            }
+        }
+    }
+
+    public bool CanSearchWholeHistory => !IsAllPlayersSelected() || HasSearchText();
 
     public bool KeepGameActive
     {
@@ -551,6 +635,147 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
         }
     }
 
+    private async Task InitializeAsync()
+    {
+        await PromptForOldLogImportAsync();
+        await RefreshAvailableLogDatesAsync();
+        await SelectLogDateAsync(DateTime.Today, reload: true);
+
+        if (settings.OpenTodayFileOnStart)
+        {
+            await OpenTodayFileAsync(reloadDate: false);
+        }
+        else
+        {
+            RestartTimer();
+        }
+    }
+
+    private async Task PromptForOldLogImportAsync()
+    {
+        IReadOnlyList<string> filesToImport = await Task.Run(() => ChatFileResolver
+            .GetLogFilePaths(settings.LogsDirectory, settings.FileNamePattern)
+            .Where(chatDatabase.NeedsImport)
+            .ToList());
+
+        if (filesToImport.Count == 0)
+        {
+            return;
+        }
+
+        if (!ImportLogsDialogWindow.ConfirmImport(
+                System.Windows.Application.Current.MainWindow,
+                filesToImport.Count))
+        {
+            return;
+        }
+
+        try
+        {
+            await ImportLogFilesAsync(filesToImport, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            IsLoading = false;
+            StatusText = $"Ошибка импорта старых логов: {ex.Message}";
+
+            ImportLogsDialogWindow.ShowNotice(
+                System.Windows.Application.Current.MainWindow,
+                "Импорт не завершен",
+                "Импорт старых логов не был завершен. Файлы не удалялись, и их можно будет импортировать повторно при следующем запуске.");
+        }
+    }
+
+    private async Task ImportLogFilesAsync(IReadOnlyList<string> files, CancellationToken cancellationToken)
+    {
+        if (files.Count == 0)
+        {
+            return;
+        }
+
+        long[] fileWeights = await Task.Run(() => files
+            .Select(path =>
+            {
+                if (!System.IO.File.Exists(path))
+                {
+                    return 1L;
+                }
+
+                long importedUntilByte = chatDatabase.GetImportedUntilByte(path);
+                long remainingBytes = Math.Max(0, new FileInfo(path).Length - importedUntilByte);
+                return Math.Max(1, remainingBytes);
+            })
+            .ToArray(), cancellationToken);
+
+        long totalWeight = Math.Max(1, fileWeights.Sum());
+        long completedWeight = 0;
+
+        await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
+        {
+            IsLoading = true;
+            LoadingTitle = "Импорт старых логов";
+            LoadingProgress = 0;
+            LoadingProgressText = "0%";
+            LoadingText = $"файл 0 из {files.Count}";
+        }, Threading.DispatcherPriority.Background);
+
+        for (int i = 0; i < files.Count; i++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            string path = files[i];
+            int currentFileNumber = i + 1;
+            long fileWeight = fileWeights[i];
+            long baseWeight = completedWeight;
+
+            if (!System.IO.File.Exists(path))
+            {
+                completedWeight += fileWeight;
+                continue;
+            }
+
+            var progress = new Progress<ChatLogReadProgress>(value =>
+            {
+                long currentFileWeight = value.TotalBytes > 0
+                    ? Math.Min(fileWeight, Math.Max(0, value.ReadBytes))
+                    : fileWeight;
+                long importedWeight = Math.Min(totalWeight, baseWeight + currentFileWeight);
+                int percent = (int)Math.Clamp(importedWeight * 100L / totalWeight, 0L, 100L);
+
+                LoadingProgress = percent;
+                LoadingProgressText = $"{percent}%";
+                LoadingText = value.TotalLines > 0
+                    ? $"файл {currentFileNumber} из {files.Count}: загружено {value.ParsedLines:N0} из {value.TotalLines:N0} строк"
+                    : $"файл {currentFileNumber} из {files.Count}: загружено {value.ParsedLines:N0} строк";
+            });
+
+            await Task.Run(() =>
+            {
+                long startPosition = chatDatabase.GetImportedUntilByte(path);
+                var reader = new ChatLogTailReader();
+                reader.SetFile(path, startPosition);
+
+                reader.ReadNewMessages(
+                    ignoreCombatChats: true,
+                    batch => chatDatabase.ImportMessages(path, batch),
+                    progress,
+                    cancellationToken);
+
+                chatDatabase.UpdateImportedPosition(path, reader.LastPosition, markImportComplete: true);
+            }, cancellationToken);
+
+            completedWeight += fileWeight;
+        }
+
+        await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
+        {
+            LoadingProgress = 100;
+            LoadingProgressText = "100%";
+            LoadingText = "импорт завершен";
+            IsLoading = false;
+        }, Threading.DispatcherPriority.Background);
+    }
+
     private void OpenFileDialog()
     {
         var dialog = new Win32.OpenFileDialog
@@ -562,7 +787,7 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
 
         if (dialog.ShowDialog() == true)
         {
-            OpenFile(dialog.FileName, clearCurrentMessages: true, autoFollowTodayFile: false);
+            _ = OpenFileAsync(dialog.FileName, clearCurrentMessages: true, autoFollowTodayFile: false);
         }
     }
 
@@ -615,7 +840,17 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
 
     private void OpenTodayFile()
     {
+        _ = OpenTodayFileAsync(reloadDate: true);
+    }
+
+    private async Task OpenTodayFileAsync(bool reloadDate)
+    {
         followedLogDate = DateTime.Today;
+
+        if (reloadDate)
+        {
+            await SelectLogDateAsync(followedLogDate, reload: true);
+        }
         string? path = ChatFileResolver.GetFilePathForDate(settings.LogsDirectory, settings.FileNamePattern, followedLogDate);
 
         if (path is null)
@@ -626,10 +861,14 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
             return;
         }
 
-        OpenFile(path, clearCurrentMessages: true, autoFollowTodayFile: true);
+        await OpenFileAsync(path, clearCurrentMessages: false, autoFollowTodayFile: true, reloadDate: false);
     }
 
-    private void OpenFile(string path, bool clearCurrentMessages, bool autoFollowTodayFile)
+    private async Task OpenFileAsync(
+        string path,
+        bool clearCurrentMessages,
+        bool autoFollowTodayFile,
+        bool reloadDate = true)
     {
         if (!System.IO.File.Exists(path))
         {
@@ -652,19 +891,19 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
             }
         }
 
-        if (clearCurrentMessages)
+        if (clearCurrentMessages && reloadDate)
         {
-            ClearMessages();
+            await SelectLogDateAsync(followedLogDate, reload: true);
         }
 
-        tailReader.SetFile(path, settings.ReadExistingFileOnOpen);
+        PrepareTailReaderForFile(path);
         CurrentFilePath = path;
         StatusText = $"Открыт файл: {path}";
         RestartTimer();
-        _ = ReadNewMessagesAsync();
+        await ReadNewMessagesAsync();
     }
 
-    private bool TrySwitchToLatestTodayFileIfNeeded()
+    private async Task<bool> TrySwitchToLatestTodayFileIfNeededAsync()
     {
         if (!autoFollowTodayFile || !settings.AutoSwitchToLatestTodayFile)
         {
@@ -680,7 +919,7 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
 
             if (settings.ClearMessagesWhenDateChanges)
             {
-                System.Windows.Application.Current.Dispatcher.Invoke(ClearMessages, Threading.DispatcherPriority.Background);
+                await SelectLogDateAsync(today, reload: !SearchWholeHistory);
             }
         }
 
@@ -695,20 +934,43 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
             return false;
         }
 
+        string? previousPath = tailReader.FilePath;
+        if (!string.IsNullOrWhiteSpace(previousPath) && System.IO.File.Exists(previousPath))
+        {
+            bool allowNotificationsForRemainder = settings.NotificationsEnabled
+                && !string.IsNullOrWhiteSpace(CurrentFilePath);
+
+            await ReadCurrentTailIntoDatabaseAsync(
+                showProgress: false,
+                allowNotifications: allowNotificationsForRemainder,
+                CancellationToken.None);
+        }
+
         bool clearCurrentMessages = !settings.KeepMessagesWhenLogFileChanges;
         if (clearCurrentMessages)
         {
-            System.Windows.Application.Current.Dispatcher.Invoke(ClearMessages, Threading.DispatcherPriority.Background);
+            await System.Windows.Application.Current.Dispatcher.InvokeAsync(
+                () => ClearMessagesCore(resetFilters: false),
+                Threading.DispatcherPriority.Background);
         }
 
-        tailReader.SetFile(latestPath, readExistingContent: true);
+        PrepareTailReaderForFile(latestPath);
         System.Windows.Application.Current.Dispatcher.Invoke(() =>
         {
             CurrentFilePath = latestPath;
             StatusText = $"Переключен актуальный файл: {latestPath}";
         }, Threading.DispatcherPriority.Background);
 
+        TryDeleteImportedLogFile(previousPath);
         return true;
+    }
+
+    private void PrepareTailReaderForFile(string path)
+    {
+        long startPosition = chatDatabase.GetImportedUntilByte(path);
+
+        chatDatabase.EnsureLogFile(path, startPosition);
+        tailReader.SetFile(path, startPosition);
     }
 
     private void SaveSettings()
@@ -753,7 +1015,7 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
 
         try
         {
-            bool switchedToAnotherFile = TrySwitchToLatestTodayFileIfNeeded();
+            bool switchedToAnotherFile = await TrySwitchToLatestTodayFileIfNeededAsync();
             showProgress = (settings.ReadExistingFileOnOpen && Tabs.FirstOrDefault(x => x.Name == AllTabName)?.TotalCount == 0)
                 || switchedToAnotherFile;
 
@@ -761,38 +1023,23 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
             {
                 IsLoading = true;
                 LoadingProgress = 0;
-                LoadingText = "Загрузка лога: 0%";
+                LoadingProgressText = "0%";
+                LoadingTitle = "Чтение файла";
+                LoadingText = "загружено 0 из 0 строк";
             }
-
-            var progress = new Progress<ChatLogReadProgress>(value =>
-            {
-                if (!showProgress)
-                {
-                    return;
-                }
-
-                LoadingProgress = value.Percent;
-                LoadingText = $"Загрузка лога: {value.Percent}% | строк: {value.ParsedLines:N0} | сообщений: {value.AcceptedMessages:N0}";
-            });
 
             bool allowNotifications = settings.NotificationsEnabled
                 && !showProgress
                 && !string.IsNullOrWhiteSpace(CurrentFilePath);
 
-            int addedCount = await Task.Run(() => tailReader.ReadNewMessages(
-                settings.IgnoreCombatChats,
-                batch => System.Windows.Application.Current.Dispatcher.Invoke(
-                    () => AddMessages(
-                        batch,
-                        updateStatus: false,
-                        notify: allowNotifications,
-                        handleAntiAway: !showProgress),
-                    Threading.DispatcherPriority.Background),
-                progress,
-                CancellationToken.None));
+            int addedCount = await ReadCurrentTailIntoDatabaseAsync(
+                showProgress,
+                allowNotifications,
+                CancellationToken.None);
 
             if (addedCount > 0)
             {
+                await RefreshAvailableLogDatesAsync();
                 await System.Windows.Application.Current.Dispatcher.InvokeAsync(() => UpdateStatusText(), Threading.DispatcherPriority.Background);
             }
         }
@@ -807,13 +1054,275 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
                 await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
                 {
                     LoadingProgress = 100;
-                    LoadingText = "Загрузка завершена";
+                    LoadingProgressText = "100%";
+                    LoadingText = "загрузка завершена";
                     IsLoading = false;
                     UpdateStatusText();
                 });
             }
 
             readLock.Release();
+        }
+    }
+
+    private async Task<int> ReadCurrentTailIntoDatabaseAsync(
+        bool showProgress,
+        bool allowNotifications,
+        CancellationToken cancellationToken)
+    {
+        string? path = tailReader.FilePath;
+        if (string.IsNullOrWhiteSpace(path) || !System.IO.File.Exists(path))
+        {
+            return 0;
+        }
+
+        var progress = showProgress
+            ? new Progress<ChatLogReadProgress>(value =>
+            {
+                LoadingProgress = value.Percent;
+                LoadingProgressText = $"{value.Percent}%";
+                LoadingText = value.TotalLines > 0
+                    ? $"загружено {value.ParsedLines:N0} из {value.TotalLines:N0} строк, сообщений {value.AcceptedMessages:N0}"
+                    : $"загружено {value.ParsedLines:N0} строк, сообщений {value.AcceptedMessages:N0}";
+            })
+            : null;
+
+        int insertedCount = 0;
+
+        await Task.Run(() =>
+        {
+            tailReader.ReadNewMessages(
+                ignoreCombatChats: true,
+                batch =>
+                {
+                    IReadOnlyList<ChatMessage> inserted = chatDatabase.ImportMessages(path, batch);
+                    if (inserted.Count == 0)
+                    {
+                        return;
+                    }
+
+                    insertedCount += inserted.Count;
+
+                    System.Windows.Application.Current.Dispatcher.Invoke(
+                        () => AddImportedMessagesToCurrentView(
+                            inserted,
+                            allowNotifications,
+                            handleAntiAway: !showProgress),
+                        Threading.DispatcherPriority.Background);
+                },
+                progress,
+                cancellationToken);
+
+            chatDatabase.UpdateImportedPosition(path, tailReader.LastPosition, markImportComplete: true);
+        }, cancellationToken);
+
+        return insertedCount;
+    }
+
+    private void AddImportedMessagesToCurrentView(
+        IReadOnlyList<ChatMessage> messages,
+        bool notify,
+        bool handleAntiAway)
+    {
+        List<ChatMessage> visibleMessages = messages
+            .Where(IsMessageInCurrentScope)
+            .ToList();
+
+        if (visibleMessages.Count == 0)
+        {
+            return;
+        }
+
+        AddMessages(
+            visibleMessages,
+            updateStatus: false,
+            notify: notify,
+            handleAntiAway: handleAntiAway);
+    }
+
+    private bool IsMessageInCurrentScope(ChatMessage message)
+    {
+        if (SearchWholeHistory)
+        {
+            return FilterMessage(message);
+        }
+
+        DateTime date = SelectedLogDate?.Date ?? DateTime.Today;
+        return message.Time >= date && message.Time < date.AddDays(1);
+    }
+
+    private async Task SelectLogDateAsync(DateTime date, bool reload)
+    {
+        suppressLogDateReload = true;
+        SelectedLogDate = date.Date;
+        suppressLogDateReload = false;
+
+        if (reload)
+        {
+            await LoadMessagesFromDatabaseAsync("Загрузка сообщений");
+        }
+    }
+
+    private async Task RefreshAvailableLogDatesAsync()
+    {
+        IReadOnlyList<DateTime> dates = await Task.Run(chatDatabase.GetAvailableLogDates);
+
+        await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
+        {
+            AvailableLogDates.Clear();
+
+            foreach (DateTime date in dates)
+            {
+                AvailableLogDates.Add(date.Date);
+            }
+
+            OnPropertyChanged(nameof(AvailableLogDates));
+        }, Threading.DispatcherPriority.Background);
+    }
+
+    private async Task LoadMessagesFromDatabaseAsync(string loadingTitle)
+    {
+        databaseLoadCancellation?.Cancel();
+        databaseLoadCancellation = new CancellationTokenSource();
+        CancellationToken cancellationToken = databaseLoadCancellation.Token;
+
+        try
+        {
+            await loadLock.WaitAsync(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+
+        try
+        {
+            ChatMessageQuery query = BuildCurrentQuery();
+            ChatMessageQuery playerOptionsQuery = BuildPlayerOptionsQuery(query);
+
+            await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
+            {
+                IsLoading = true;
+                LoadingTitle = loadingTitle;
+                LoadingProgress = 0;
+                LoadingProgressText = "0%";
+                LoadingText = "загружено 0 из 0 сообщений";
+                ClearMessagesCore(resetFilters: false);
+            }, Threading.DispatcherPriority.Background);
+
+            IReadOnlyList<string> playerOptions = await Task.Run(
+                () => chatDatabase.GetPlayers(playerOptionsQuery, FilterPlayerByDescriptor),
+                cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            await System.Windows.Application.Current.Dispatcher.InvokeAsync(
+                () => ReplacePlayers(playerOptions),
+                Threading.DispatcherPriority.Background,
+                cancellationToken);
+
+            var progress = new Progress<ChatDatabaseLoadProgress>(value =>
+            {
+                LoadingProgress = value.Percent;
+                LoadingProgressText = $"{value.Percent}%";
+                LoadingText = $"загружено {value.LoadedRows:N0} из {value.TotalRows:N0} сообщений";
+            });
+
+            await Task.Run(() => chatDatabase.LoadMessages(
+                query,
+                batch => System.Windows.Application.Current.Dispatcher.Invoke(
+                    () => AddMessages(batch, updateStatus: false),
+                    Threading.DispatcherPriority.Background),
+                progress,
+                cancellationToken), cancellationToken);
+
+            await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
+            {
+                LoadingProgress = 100;
+                LoadingProgressText = "100%";
+                LoadingText = "загрузка завершена";
+                IsLoading = false;
+                UpdateStatusText();
+            }, Threading.DispatcherPriority.Background);
+        }
+        catch (OperationCanceledException)
+        {
+            // Новая загрузка уже стартовала, старый результат больше не нужен.
+        }
+        catch (Exception ex)
+        {
+            await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
+            {
+                IsLoading = false;
+                StatusText = $"Ошибка загрузки из базы: {ex.Message}";
+            });
+        }
+        finally
+        {
+            loadLock.Release();
+        }
+    }
+
+    private ChatMessageQuery BuildCurrentQuery()
+    {
+        DateTime? start = null;
+        DateTime? end = null;
+
+        if (!SearchWholeHistory)
+        {
+            start = (SelectedLogDate ?? DateTime.Today).Date;
+            end = start.Value.AddDays(1);
+        }
+
+        if (!SearchWholeHistory)
+        {
+            return new ChatMessageQuery
+            {
+                StartInclusive = start,
+                EndExclusive = end,
+                FilterPlayerByDescriptor = FilterPlayerByDescriptor
+            };
+        }
+
+        return new ChatMessageQuery
+        {
+            StartInclusive = start,
+            EndExclusive = end,
+            PlayerText = IsAllPlayersSelected() ? null : SelectedPlayer,
+            FilterPlayerByDescriptor = FilterPlayerByDescriptor,
+            ChannelName = IsAllChannelsSelected() ? null : SelectedChannel,
+            MessageText = string.IsNullOrWhiteSpace(SearchText) ? null : SearchText
+        };
+    }
+
+    private static ChatMessageQuery BuildPlayerOptionsQuery(ChatMessageQuery query)
+    {
+        return new ChatMessageQuery
+        {
+            StartInclusive = query.StartInclusive,
+            EndExclusive = query.EndExclusive,
+            ChannelName = query.ChannelName,
+            MessageText = query.MessageText
+        };
+    }
+
+    private void TryDeleteImportedLogFile(string? path)
+    {
+        if (!settings.DeleteImportedLogFiles
+            || string.IsNullOrWhiteSpace(path)
+            || string.Equals(path, CurrentFilePath, StringComparison.OrdinalIgnoreCase)
+            || !System.IO.File.Exists(path)
+            || !chatDatabase.IsLogFileSafelyImported(path))
+        {
+            return;
+        }
+
+        try
+        {
+            System.IO.File.Delete(path);
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Не удалось удалить импортированный лог: {ex.Message}";
         }
     }
 
@@ -919,12 +1428,12 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
 
         if (!string.IsNullOrWhiteSpace(message.Player) && message.Player != "@")
         {
-            InsertSorted(Players, message.Player, AllPlayersValue);
+            InsertSortedPlayer(message.Player);
         }
 
         if (!string.IsNullOrWhiteSpace(message.DisplayTarget) && message.DisplayTarget != "@")
         {
-            InsertSorted(Players, message.DisplayTarget, AllPlayersValue);
+            InsertSortedPlayer(message.DisplayTarget);
         }
 
         string chatName = message.ChatName;
@@ -956,6 +1465,46 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
         }
 
         collection.Add(value);
+    }
+
+    private void InsertSortedPlayer(string value)
+    {
+        if (Players.Any(x => string.Equals(x, value, StringComparison.CurrentCultureIgnoreCase)))
+        {
+            return;
+        }
+
+        int startIndex = Players.Count > 0 && string.Equals(Players[0], AllPlayersValue, StringComparison.CurrentCultureIgnoreCase)
+            ? 1
+            : 0;
+
+        for (int i = startIndex; i < Players.Count; i++)
+        {
+            if (ComparePlayers(value, Players[i]) < 0)
+            {
+                Players.Insert(i, value);
+                return;
+            }
+        }
+
+        Players.Add(value);
+    }
+
+    private int ComparePlayers(string left, string right)
+    {
+        if (FilterPlayerByDescriptor)
+        {
+            int descriptorCompare = StringComparer.CurrentCultureIgnoreCase.Compare(
+                PlayerIdentityService.ExtractDescriptor(left),
+                PlayerIdentityService.ExtractDescriptor(right));
+
+            if (descriptorCompare != 0)
+            {
+                return descriptorCompare;
+            }
+        }
+
+        return StringComparer.CurrentCultureIgnoreCase.Compare(left, right);
     }
 
 
@@ -1119,52 +1668,79 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
 
     private bool IsPlayerMatched(ChatMessage message)
     {
-        if (string.IsNullOrWhiteSpace(SelectedPlayer) || SelectedPlayer == AllPlayersValue)
+        if (IsAllPlayersSelected())
         {
             return true;
         }
 
+        string filterText = SelectedPlayer?.Trim() ?? string.Empty;
+
         if (!FilterPlayerByDescriptor)
         {
-            return string.Equals(message.Player, SelectedPlayer, StringComparison.OrdinalIgnoreCase)
-                || string.Equals(message.DisplayTarget, SelectedPlayer, StringComparison.OrdinalIgnoreCase);
+            return ContainsText(message.Player, filterText)
+                || ContainsText(message.DisplayTarget, filterText);
         }
 
-        string selectedDescriptor = ExtractPlayerDescriptor(SelectedPlayer);
+        string selectedDescriptor = PlayerIdentityService.ExtractDescriptor(filterText);
         if (string.IsNullOrWhiteSpace(selectedDescriptor))
         {
-            return string.Equals(message.Player, SelectedPlayer, StringComparison.OrdinalIgnoreCase)
-                || string.Equals(message.DisplayTarget, SelectedPlayer, StringComparison.OrdinalIgnoreCase);
+            selectedDescriptor = filterText;
         }
 
-        return string.Equals(ExtractPlayerDescriptor(message.Player), selectedDescriptor, StringComparison.OrdinalIgnoreCase)
-            || string.Equals(ExtractPlayerDescriptor(message.DisplayTarget), selectedDescriptor, StringComparison.OrdinalIgnoreCase);
+        return ContainsText(PlayerIdentityService.ExtractDescriptor(message.Player), selectedDescriptor)
+            || ContainsText(PlayerIdentityService.ExtractDescriptor(message.DisplayTarget), selectedDescriptor);
     }
 
-    private static string ExtractPlayerDescriptor(string? player)
+    private static bool ContainsText(string? value, string filterText)
     {
-        if (string.IsNullOrWhiteSpace(player))
-        {
-            return string.Empty;
-        }
-
-        int atIndex = player.IndexOf('@');
-        return atIndex >= 0
-            ? player[atIndex..]
-            : string.Empty;
+        return !string.IsNullOrWhiteSpace(value)
+            && value.IndexOf(filterText, StringComparison.OrdinalIgnoreCase) >= 0;
     }
 
-    private void RefreshFilters()
+    private bool IsAllPlayersSelected()
     {
-        foreach (ChatTabViewModel tab in Tabs)
+        return IsAllPlayersValue(SelectedPlayer);
+    }
+
+    private bool IsAllChannelsSelected()
+    {
+        return IsAllChannelsValue(SelectedChannel);
+    }
+
+    private bool HasSearchText()
+    {
+        return !string.IsNullOrWhiteSpace(SearchText);
+    }
+
+    private static bool IsAllPlayersValue(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value)
+            || string.Equals(value, AllPlayersValue, StringComparison.CurrentCultureIgnoreCase);
+    }
+
+    private static bool IsAllChannelsValue(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value)
+            || string.Equals(value, AllChannelsValue, StringComparison.CurrentCultureIgnoreCase);
+    }
+
+    private void RefreshFiltersOrReloadFromDatabase()
+    {
+        if (SearchWholeHistory)
         {
-            tab.Refresh();
+            _ = LoadMessagesFromDatabaseAsync("Загрузка сообщений");
+            return;
         }
 
-        RefreshVisibleTabs();
+        RefreshFilters();
     }
 
     private void ClearMessages()
+    {
+        ClearMessagesCore(resetFilters: true);
+    }
+
+    private void ClearMessagesCore(bool resetFilters)
     {
         foreach (ChatTabViewModel tab in Tabs)
         {
@@ -1179,19 +1755,122 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
             }
         }
 
-        Players.Clear();
-        Players.Add(AllPlayersValue);
-        Channels.Clear();
-        Channels.Add(AllChannelsValue);
-        ResetNotificationChannels();
-        selectedPlayer = AllPlayersValue;
-        selectedChannel = AllChannelsValue;
-        searchText = string.Empty;
-        OnPropertyChanged(nameof(SelectedPlayer));
-        OnPropertyChanged(nameof(SelectedChannel));
-        OnPropertyChanged(nameof(SearchText));
+        ResetFilterOptions(resetFilters);
+
+        if (resetFilters)
+        {
+            selectedPlayer = AllPlayersValue;
+            selectedChannel = AllChannelsValue;
+            searchText = string.Empty;
+            searchWholeHistory = false;
+            OnPropertyChanged(nameof(SelectedPlayer));
+            OnPropertyChanged(nameof(CanSearchWholeHistory));
+            OnPropertyChanged(nameof(SearchWholeHistory));
+            OnPropertyChanged(nameof(SelectedChannel));
+            OnPropertyChanged(nameof(SearchText));
+        }
+
         RefreshFilters();
         SelectedTab = Tabs.FirstOrDefault();
+    }
+
+    private void ResetFilterOptions(bool resetFilters)
+    {
+        string? preservedPlayer = selectedPlayer;
+        string? preservedChannel = selectedChannel;
+        bool previousSuppressFilterChange = suppressFilterChange;
+
+        suppressFilterChange = true;
+
+        try
+        {
+            Players.Clear();
+            Players.Add(AllPlayersValue);
+
+            if (!resetFilters && !IsAllPlayersValue(preservedPlayer))
+            {
+                InsertSortedPlayer(preservedPlayer!);
+            }
+
+            Channels.Clear();
+            Channels.Add(AllChannelsValue);
+            ResetNotificationChannels();
+
+            if (!resetFilters && !IsAllChannelsValue(preservedChannel))
+            {
+                InsertSorted(Channels, preservedChannel!, AllChannelsValue);
+                InsertSortedNotificationChannel(preservedChannel!);
+            }
+        }
+        finally
+        {
+            suppressFilterChange = previousSuppressFilterChange;
+        }
+
+        if (resetFilters)
+        {
+            return;
+        }
+
+        OnPropertyChanged(nameof(SelectedPlayer));
+        OnPropertyChanged(nameof(CanSearchWholeHistory));
+        OnPropertyChanged(nameof(SelectedChannel));
+    }
+
+    private void ReplacePlayers(IReadOnlyList<string> players)
+    {
+        string? preservedPlayer = selectedPlayer;
+        bool previousSuppressFilterChange = suppressFilterChange;
+
+        suppressFilterChange = true;
+
+        try
+        {
+            Players.Clear();
+            Players.Add(AllPlayersValue);
+
+            if (!IsAllPlayersValue(preservedPlayer)
+                && !players.Any(player => string.Equals(player, preservedPlayer, StringComparison.CurrentCultureIgnoreCase)))
+            {
+                InsertSortedPlayer(preservedPlayer!);
+            }
+
+            foreach (string player in players)
+            {
+                InsertSortedPlayer(player);
+            }
+        }
+        finally
+        {
+            suppressFilterChange = previousSuppressFilterChange;
+        }
+
+        OnPropertyChanged(nameof(SelectedPlayer));
+        OnPropertyChanged(nameof(CanSearchWholeHistory));
+    }
+
+    private void RefreshFilters()
+    {
+        foreach (ChatTabViewModel tab in Tabs)
+        {
+            tab.Refresh();
+        }
+
+        RefreshVisibleTabs();
+    }
+
+    private void RebuildPlayersFromMessages()
+    {
+        var players = Tabs
+            .FirstOrDefault(x => x.Name == AllTabName)?
+            .Messages
+            .SelectMany(message => new[] { message.Player, message.DisplayTarget })
+            .Where(value => !string.IsNullOrWhiteSpace(value) && value != "@")
+            .Distinct(StringComparer.CurrentCultureIgnoreCase)
+            .OrderBy(value => value, Comparer<string>.Create(ComparePlayers))
+            .ToList() ?? new List<string>();
+
+        ReplacePlayers(players);
     }
 
     private void RestartTimer()
@@ -1350,7 +2029,10 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
         }
 
         timer.Dispose();
+        databaseLoadCancellation?.Cancel();
+        databaseLoadCancellation?.Dispose();
         activityKeepAliveService.Reset();
         readLock.Dispose();
+        loadLock.Dispose();
     }
 }

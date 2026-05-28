@@ -8,6 +8,8 @@ public sealed class ChatLogReadProgress
 
     public long ParsedLines { get; set; }
 
+    public long TotalLines { get; set; }
+
     public long AcceptedMessages { get; set; }
 
     public int Percent
