@@ -18,8 +18,8 @@
     <Color x:Key="DataGridAltRowColor">#1A2638</Color>
     <Color x:Key="RowHoverColor">#283A56</Color>
     <Color x:Key="SelectionColor">#2563EB</Color>
-    <Color x:Key="DataGridSelectionColor">#9A7A2E</Color>
-    <Color x:Key="DataGridSelectionTextColor">#FFF7D6</Color>
+    <Color x:Key="DataGridSelectionColor">#0B84D8</Color>
+    <Color x:Key="DataGridSelectionTextColor">#F8FAFC</Color>
     <Color x:Key="ComboPopupBackgroundColor">#172033</Color>
     <Color x:Key="ComboPopupBorderColor">#60A5FA</Color>
 
