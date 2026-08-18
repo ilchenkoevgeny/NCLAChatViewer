@@ -1,5 +1,7 @@
 using System;
+using System.Runtime.InteropServices;
 using System.Windows;
+using System.Windows.Interop;
 using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using NclaChatViewer.Models;
@@ -8,6 +10,10 @@ namespace NclaChatViewer.Views;
 
 public partial class NotificationPopupWindow : Window
 {
+    private const int GWL_EXSTYLE = -20;
+    private const int WS_EX_TOOLWINDOW = 0x00000080;
+    private const int WS_EX_NOACTIVATE = 0x08000000;
+
     private readonly Action openGameAction;
     private readonly bool disappearingPopup;
     private DispatcherTimer? closeTimer;
@@ -21,6 +27,16 @@ public partial class NotificationPopupWindow : Window
         DataContext = data;
         this.openGameAction = openGameAction;
         this.disappearingPopup = disappearingPopup;
+
+        Topmost = true;
+        ShowActivated = false;
+        Focusable = false;
+    }
+
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+        MakeWindowNonActivating();
     }
 
     protected override void OnContentRendered(EventArgs e)
@@ -71,6 +87,18 @@ public partial class NotificationPopupWindow : Window
         BeginAnimation(OpacityProperty, animation);
     }
 
+    private void MakeWindowNonActivating()
+    {
+        IntPtr hwnd = new WindowInteropHelper(this).Handle;
+        if (hwnd == IntPtr.Zero)
+        {
+            return;
+        }
+
+        int extendedStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
+        _ = SetWindowLong(hwnd, GWL_EXSTYLE, extendedStyle | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW);
+    }
+
     private void OpenGameButton_Click(object sender, RoutedEventArgs e)
     {
         openGameAction();
@@ -81,4 +109,10 @@ public partial class NotificationPopupWindow : Window
     {
         Close();
     }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern int GetWindowLong(IntPtr hWnd, int nIndex);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
 }
