@@ -7,6 +7,8 @@
         WindowStyle="None"
         ResizeMode="NoResize"
         ShowInTaskbar="False"
+        ShowActivated="False"
+        Focusable="False"
         Topmost="True"
         Background="Transparent"
         AllowsTransparency="True"
