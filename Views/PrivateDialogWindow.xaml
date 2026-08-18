@@ -12,7 +12,13 @@
         ResizeMode="CanResizeWithGrip"
         ShowInTaskbar="False"
         Background="Transparent"
-        AllowsTransparency="True">
+        AllowsTransparency="True"
+        UseLayoutRounding="True"
+        SnapsToDevicePixels="False"
+        TextOptions.TextFormattingMode="Ideal"
+        TextOptions.TextRenderingMode="ClearType"
+        TextOptions.TextHintingMode="Fixed"
+        RenderOptions.ClearTypeHint="Enabled">
     <shell:WindowChrome.WindowChrome>
         <shell:WindowChrome CaptionHeight="0"
                             ResizeBorderThickness="8"
@@ -188,11 +194,21 @@
                                         Grid.Column="0"
                                         HorizontalAlignment="Left"
                                         MaxWidth="430"
-                                        Background="{DynamicResource ControlBackgroundBrush}"
-                                        BorderBrush="{DynamicResource ControlBorderBrush}"
+                                        Background="{DynamicResource DialogIncomingBubbleBrush}"
+                                        BorderBrush="{DynamicResource DialogIncomingBubbleBorderBrush}"
                                         BorderThickness="1"
-                                        CornerRadius="12"
-                                        Padding="11,8">
+                                        CornerRadius="17"
+                                        Padding="12,9"
+                                        SnapsToDevicePixels="False"
+                                        RenderOptions.EdgeMode="Unspecified">
+                                    <Border.Effect>
+                                        <DropShadowEffect Color="#000000"
+                                                          BlurRadius="14"
+                                                          ShadowDepth="1"
+                                                          Direction="270"
+                                                          Opacity="0.16"
+                                                          RenderingBias="Quality" />
+                                    </Border.Effect>
                                     <StackPanel>
                                         <TextBlock Text="{Binding Header}"
                                                    FontSize="{Binding DataContext.SenderFontSize, RelativeSource={RelativeSource AncestorType=Window}}"
@@ -221,8 +237,8 @@
                                 <DataTrigger Binding="{Binding IsOutgoing}" Value="True">
                                     <Setter TargetName="Bubble" Property="Grid.Column" Value="1" />
                                     <Setter TargetName="Bubble" Property="HorizontalAlignment" Value="Right" />
-                                    <Setter TargetName="Bubble" Property="Background" Value="{DynamicResource SelectionBrush}" />
-                                    <Setter TargetName="Bubble" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                                    <Setter TargetName="Bubble" Property="Background" Value="{DynamicResource DialogOutgoingBubbleBrush}" />
+                                    <Setter TargetName="Bubble" Property="BorderBrush" Value="{DynamicResource DialogOutgoingBubbleBorderBrush}" />
                                 </DataTrigger>
                             </DataTemplate.Triggers>
                         </DataTemplate>

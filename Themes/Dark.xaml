@@ -22,6 +22,10 @@
     <Color x:Key="DataGridSelectionTextColor">#F8FAFC</Color>
     <Color x:Key="ComboPopupBackgroundColor">#172033</Color>
     <Color x:Key="ComboPopupBorderColor">#60A5FA</Color>
+    <Color x:Key="DialogIncomingBubbleColor">#1E2A40</Color>
+    <Color x:Key="DialogIncomingBubbleBorderColor">#334765</Color>
+    <Color x:Key="DialogOutgoingBubbleColor">#2D6CEB</Color>
+    <Color x:Key="DialogOutgoingBubbleBorderColor">#70AEFF</Color>
 
     <SolidColorBrush x:Key="WindowBackgroundBrush" Color="{StaticResource WindowBackgroundColor}" />
     <SolidColorBrush x:Key="TitleBarBackgroundBrush" Color="{StaticResource TitleBarBackgroundColor}" />
@@ -45,6 +49,10 @@
     <SolidColorBrush x:Key="DataGridSelectionTextBrush" Color="{StaticResource DataGridSelectionTextColor}" />
     <SolidColorBrush x:Key="ComboPopupBackgroundBrush" Color="{StaticResource ComboPopupBackgroundColor}" />
     <SolidColorBrush x:Key="ComboPopupBorderBrush" Color="{StaticResource ComboPopupBorderColor}" />
+    <SolidColorBrush x:Key="DialogIncomingBubbleBrush" Color="{StaticResource DialogIncomingBubbleColor}" />
+    <SolidColorBrush x:Key="DialogIncomingBubbleBorderBrush" Color="{StaticResource DialogIncomingBubbleBorderColor}" />
+    <SolidColorBrush x:Key="DialogOutgoingBubbleBrush" Color="{StaticResource DialogOutgoingBubbleColor}" />
+    <SolidColorBrush x:Key="DialogOutgoingBubbleBorderBrush" Color="{StaticResource DialogOutgoingBubbleBorderColor}" />
 
     <Style TargetType="Window">
         <Setter Property="Background" Value="{DynamicResource WindowBackgroundBrush}" />
