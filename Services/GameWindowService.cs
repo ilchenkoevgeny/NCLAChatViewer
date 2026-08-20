@@ -118,9 +118,9 @@ public sealed class GameWindowService
     {
         var handles = new List<IntPtr>();
 
-        _ = EnumWindows((handle, _) =>
+        _ = EnumWindows((handle, lParam) =>
         {
-            _ = GetWindowThreadProcessId(handle, out int windowProcessId);
+            GetWindowThreadProcessId(handle, out int windowProcessId);
             if (windowProcessId == processId)
             {
                 handles.Add(handle);
@@ -139,7 +139,7 @@ public sealed class GameWindowService
             return false;
         }
 
-        _ = GetWindowThreadProcessId(handle, out int windowProcessId);
+        GetWindowThreadProcessId(handle, out int windowProcessId);
         if (windowProcessId != processId)
         {
             return false;
