@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using NclaChatViewer.Models;
@@ -7,7 +6,7 @@ namespace NclaChatViewer.Services;
 
 public sealed class AntiAwayService
 {
-    [DllImport("user32.dll")] static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll", SetLastError = true)] static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
 
     const uint WM_KEYDOWN = 0x0100;
     const uint WM_KEYUP = 0x0101;
@@ -29,32 +28,38 @@ public sealed class AntiAwayService
 
     public async Task<string> HandleAwayKickWarningAsync(ChatMessage message)
     {
-        var proc = Process.GetProcessesByName("GameClient").FirstOrDefault();
-
-        if (proc == null)
+        if (!GameWindowService.TryFindGameWindowHandle(out IntPtr hWnd, out _, out string? errorMessage))
         {
-            return "❌ Окно игры Neverwinter Online не найдено.";
+            return $"❌ {errorMessage ?? "Окно игры Neverwinter Online не найдено."}";
         }
 
-        IntPtr hWnd = proc.MainWindowHandle;
-
-        if (hWnd == IntPtr.Zero)
+        if (!await SendReturnKeyPressAsync(hWnd))
         {
-            return "❌ Окно игры не найдено.";
+            return "❌ Окно игры найдено, но не удалось отправить первое нажатие Enter.";
         }
 
-        // Первое нажатие с удержанием
-        PostMessage(hWnd, WM_KEYDOWN, (IntPtr)VK_RETURN, IntPtr.Zero);
-        await Task.Delay(300);
-        PostMessage(hWnd, WM_KEYUP, (IntPtr)VK_RETURN, IntPtr.Zero);
         await Task.Delay(300);
 
-        // Второе нажатие с удержанием
-        PostMessage(hWnd, WM_KEYDOWN, (IntPtr)VK_RETURN, IntPtr.Zero);
-        await Task.Delay(300);
-        PostMessage(hWnd, WM_KEYUP, (IntPtr)VK_RETURN, IntPtr.Zero);
+        if (!await SendReturnKeyPressAsync(hWnd))
+        {
+            return "❌ Окно игры найдено, но не удалось отправить второе нажатие Enter.";
+        }
 
         return "✅ Успешно разбудили игру.";
+    }
+
+    private static async Task<bool> SendReturnKeyPressAsync(IntPtr hWnd)
+    {
+        if (hWnd == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        bool keyDownSent = PostMessage(hWnd, WM_KEYDOWN, (IntPtr)VK_RETURN, IntPtr.Zero);
+        await Task.Delay(300);
+        bool keyUpSent = PostMessage(hWnd, WM_KEYUP, (IntPtr)VK_RETURN, IntPtr.Zero);
+
+        return keyDownSent && keyUpSent;
     }
 
     private static string NormalizeMessageText(string? text)
