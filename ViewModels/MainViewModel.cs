@@ -43,6 +43,7 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
     private string statusText = "Файл не открыт";
     private string currentFilePath = string.Empty;
     private bool autoFollowTodayFile;
+    private bool antiAwayLiveMonitoringReady;
     private DateTime followedLogDate = DateTime.Today;
     private bool isLoading;
     private int loadingProgress;
@@ -877,6 +878,7 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
         }
 
         this.autoFollowTodayFile = autoFollowTodayFile;
+        antiAwayLiveMonitoringReady = false;
 
         if (autoFollowTodayFile)
         {
@@ -943,6 +945,7 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
             await ReadCurrentTailIntoDatabaseAsync(
                 showProgress: false,
                 allowNotifications: allowNotificationsForRemainder,
+                handleAntiAway: false,
                 CancellationToken.None);
         }
 
@@ -955,6 +958,8 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
         }
 
         PrepareTailReaderForFile(latestPath);
+        antiAwayLiveMonitoringReady = true;
+
         System.Windows.Application.Current.Dispatcher.Invoke(() =>
         {
             CurrentFilePath = latestPath;
@@ -1032,10 +1037,18 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
                 && !showProgress
                 && !string.IsNullOrWhiteSpace(CurrentFilePath);
 
+            bool handleAntiAway = autoFollowTodayFile && antiAwayLiveMonitoringReady;
+
             int addedCount = await ReadCurrentTailIntoDatabaseAsync(
                 showProgress,
                 allowNotifications,
+                handleAntiAway,
                 CancellationToken.None);
+
+            if (autoFollowTodayFile)
+            {
+                antiAwayLiveMonitoringReady = true;
+            }
 
             if (addedCount > 0)
             {
@@ -1068,6 +1081,7 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
     private async Task<int> ReadCurrentTailIntoDatabaseAsync(
         bool showProgress,
         bool allowNotifications,
+        bool handleAntiAway,
         CancellationToken cancellationToken)
     {
         string? path = tailReader.FilePath;
@@ -1107,7 +1121,7 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
                         () => AddImportedMessagesToCurrentView(
                             inserted,
                             allowNotifications,
-                            handleAntiAway: !showProgress),
+                            handleAntiAway),
                         Threading.DispatcherPriority.Background);
                 },
                 progress,
