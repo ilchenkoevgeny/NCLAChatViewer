@@ -28,24 +28,45 @@ public sealed class AntiAwayService
 
     public async Task<string> HandleAwayKickWarningAsync(ChatMessage message)
     {
-        if (!GameWindowService.TryFindGameWindowHandle(out IntPtr hWnd, out _, out string? errorMessage))
+        string? firstError = await SendReturnKeyPressToCurrentGameAsync();
+        if (firstError is not null)
         {
-            return $"❌ {errorMessage ?? "Окно игры Neverwinter Online не найдено."}";
-        }
-
-        if (!await SendReturnKeyPressAsync(hWnd))
-        {
-            return "❌ Окно игры найдено, но не удалось отправить первое нажатие Enter.";
+            return $"❌ {firstError}";
         }
 
         await Task.Delay(300);
 
-        if (!await SendReturnKeyPressAsync(hWnd))
+        string? secondError = await SendReturnKeyPressToCurrentGameAsync();
+        if (secondError is not null)
         {
-            return "❌ Окно игры найдено, но не удалось отправить второе нажатие Enter.";
+            return $"❌ {secondError}";
         }
 
         return "✅ Успешно разбудили игру.";
+    }
+
+    private static async Task<string?> SendReturnKeyPressToCurrentGameAsync()
+    {
+        if (!GameWindowService.TryFindGameWindowHandle(out IntPtr hWnd, out _, out string? errorMessage))
+        {
+            return errorMessage ?? "Окно игры Neverwinter Online не найдено.";
+        }
+
+        if (await SendReturnKeyPressAsync(hWnd))
+        {
+            return null;
+        }
+
+        // Между поиском окна и отправкой сообщения GameClient мог завершиться и запуститься заново.
+        // Повторно ищем актуальное окно и пробуем ещё раз уже с новым HWND.
+        if (GameWindowService.TryFindGameWindowHandle(out IntPtr retryHWnd, out _, out _)
+            && retryHWnd != hWnd
+            && await SendReturnKeyPressAsync(retryHWnd))
+        {
+            return null;
+        }
+
+        return "Окно игры найдено, но не удалось отправить нажатие Enter.";
     }
 
     private static async Task<bool> SendReturnKeyPressAsync(IntPtr hWnd)
