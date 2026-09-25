@@ -38,7 +38,8 @@ public sealed class NotificationService
 
         if (string.IsNullOrWhiteSpace(rule.Phrase))
         {
-            return false;
+            return !string.IsNullOrWhiteSpace(rule.ChatFilter)
+                && !string.Equals(rule.ChatFilter, "Все чаты", StringComparison.OrdinalIgnoreCase);
         }
 
         return message.Message?.IndexOf(rule.Phrase, StringComparison.OrdinalIgnoreCase) >= 0;
